@@ -3,7 +3,7 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<title>File Upload</title>
+		<title>File Transfer</title>
 		<style>
 			:root {
 				color-scheme: light;
@@ -58,9 +58,115 @@
 				cursor: pointer;
 			}
 
+			button.ghost {
+				background: #edf2f7;
+				color: #2d3748;
+			}
+
 			button:disabled {
 				opacity: 0.6;
 				cursor: not-allowed;
+			}
+
+			.section {
+				margin-top: 24px;
+				padding-top: 20px;
+				border-top: 1px solid #e6ecf5;
+			}
+
+			.section h2 {
+				margin: 0 0 6px;
+				font-size: 1.2rem;
+			}
+
+			#shareStatus {
+				min-height: 20px;
+				font-size: 0.9rem;
+				color: #4a5568;
+			}
+
+			.share-toolbar {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				align-items: center;
+				justify-content: space-between;
+			}
+
+			.breadcrumb {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 6px;
+				align-items: center;
+				font-size: 0.95rem;
+				color: #4a5568;
+			}
+
+			.breadcrumb button {
+				background: none;
+				border: none;
+				padding: 0;
+				color: #2b6cb0;
+				font-weight: 600;
+				cursor: pointer;
+			}
+
+			.share-list {
+				list-style: none;
+				margin: 12px 0 0;
+				padding: 0;
+				display: grid;
+				gap: 10px;
+			}
+
+			.share-item {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 12px;
+				border: 1px solid #e2e8f0;
+				border-radius: 12px;
+				padding: 10px 12px;
+				background: #f8fbff;
+			}
+
+			.share-meta {
+				display: grid;
+				gap: 4px;
+			}
+
+			.share-name {
+				font-weight: 600;
+			}
+
+			.share-details {
+				font-size: 0.85rem;
+				color: #4a5568;
+			}
+
+			.share-actions {
+				display: flex;
+				gap: 8px;
+				align-items: center;
+			}
+
+			.share-actions a,
+			.share-actions button {
+				font-size: 0.85rem;
+				font-weight: 600;
+				padding: 6px 10px;
+				border-radius: 8px;
+				border: none;
+				text-decoration: none;
+				background: #2b6cb0;
+				color: #ffffff;
+				cursor: pointer;
+			}
+
+			.share-actions a.secondary,
+			.share-actions button.secondary {
+				background: #edf2f7;
+				color: #2d3748;
 			}
 
 			#status {
@@ -78,6 +184,22 @@
 				<button type="submit" id="uploadButton">Upload</button>
 				<div id="status" role="status" aria-live="polite"></div>
 			</form>
+
+			<section class="section" aria-labelledby="shareHeading">
+				<div class="share-toolbar">
+					<div>
+						<h2 id="shareHeading">Shared files</h2>
+						<p>Browse what is available in the share folder.</p>
+					</div>
+					<div class="share-actions">
+						<button type="button" class="ghost" id="shareUp">Up</button>
+						<button type="button" id="shareRefresh">Refresh</button>
+					</div>
+				</div>
+				<div class="breadcrumb" id="sharePath"></div>
+				<div id="shareStatus" role="status" aria-live="polite"></div>
+				<ul id="shareList" class="share-list" aria-live="polite"></ul>
+			</section>
 		</main>
 
 		<script>
@@ -85,6 +207,11 @@
 			const fileInput = document.getElementById("fileInput");
 			const statusEl = document.getElementById("status");
 			const uploadButton = document.getElementById("uploadButton");
+			const shareListEl = document.getElementById("shareList");
+			const shareStatusEl = document.getElementById("shareStatus");
+			const sharePathEl = document.getElementById("sharePath");
+			const shareRefreshButton = document.getElementById("shareRefresh");
+			const shareUpButton = document.getElementById("shareUp");
 
 			form.addEventListener("submit", async (event) => {
 				event.preventDefault();
@@ -117,6 +244,178 @@
 					uploadButton.disabled = false;
 				}
 			});
+
+			const formatBytes = (bytes) => {
+				if (typeof bytes !== "number" || Number.isNaN(bytes)) {
+					return "";
+				}
+				if (bytes === 0) {
+					return "0 B";
+				}
+				const units = ["B", "KB", "MB", "GB", "TB"];
+				const index = Math.min(
+					Math.floor(Math.log(bytes) / Math.log(1024)),
+					units.length - 1
+				);
+				const value = bytes / 1024 ** index;
+				return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+			};
+
+			const formatDate = (isoString) => {
+				if (!isoString) {
+					return "";
+				}
+				const date = new Date(isoString);
+				return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+			};
+
+			const getCurrentSharePath = () => {
+				const params = new URLSearchParams(window.location.search);
+				return params.get("path") || "";
+			};
+
+			const updateUrlPath = (path) => {
+				const params = new URLSearchParams(window.location.search);
+				if (path) {
+					params.set("path", path);
+				} else {
+					params.delete("path");
+				}
+				const query = params.toString();
+				const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}`;
+				history.pushState(null, "", nextUrl);
+			};
+
+			const buildListUrl = (path) => {
+				return path ? `/share/list?path=${encodeURIComponent(path)}` : "/share/list";
+			};
+
+			const renderBreadcrumb = (path) => {
+				sharePathEl.textContent = "";
+				const rootButton = document.createElement("button");
+				rootButton.type = "button";
+				rootButton.textContent = "share";
+				rootButton.addEventListener("click", () => navigateToShare(""));
+				sharePathEl.append(rootButton);
+
+				const parts = path ? path.split("/").filter(Boolean) : [];
+				let current = "";
+				parts.forEach((part) => {
+					current = current ? `${current}/${part}` : part;
+					const separator = document.createElement("span");
+					separator.textContent = "/";
+					sharePathEl.append(separator);
+					const crumb = document.createElement("button");
+					crumb.type = "button";
+					crumb.textContent = part;
+					crumb.addEventListener("click", () => navigateToShare(current));
+					sharePathEl.append(crumb);
+				});
+			};
+
+			const renderShareEntries = (entries) => {
+				shareListEl.textContent = "";
+				if (!entries || entries.length === 0) {
+					const emptyItem = document.createElement("li");
+					emptyItem.className = "share-item";
+					emptyItem.textContent = "No files or folders in this location.";
+					shareListEl.append(emptyItem);
+					return;
+				}
+
+				entries.forEach((entry) => {
+					const item = document.createElement("li");
+					item.className = "share-item";
+					const meta = document.createElement("div");
+					meta.className = "share-meta";
+					const name = document.createElement("div");
+					name.className = "share-name";
+					name.textContent = entry.type === "directory" ? `[DIR] ${entry.name}` : `[FILE] ${entry.name}`;
+					const details = document.createElement("div");
+					details.className = "share-details";
+					const modified = formatDate(entry.modifiedAt);
+					if (entry.type === "directory") {
+						details.textContent = modified ? `Updated ${modified}` : "";
+					} else {
+						const size = formatBytes(entry.size);
+						const parts = [size, modified].filter(Boolean);
+						details.textContent = parts.join(" • ");
+					}
+					meta.append(name, details);
+
+					const actions = document.createElement("div");
+					actions.className = "share-actions";
+					if (entry.type === "directory") {
+						const browseButton = document.createElement("button");
+						browseButton.type = "button";
+						browseButton.textContent = "Open";
+						browseButton.addEventListener("click", () => navigateToShare(entry.path));
+						actions.append(browseButton);
+					} else {
+						const downloadLink = document.createElement("a");
+						downloadLink.href = entry.downloadUrl;
+						downloadLink.textContent = "Download";
+						const openLink = document.createElement("a");
+						openLink.href = entry.url;
+						openLink.textContent = "Open";
+						openLink.target = "_blank";
+						openLink.rel = "noopener";
+						openLink.className = "secondary";
+						actions.append(downloadLink, openLink);
+					}
+					item.append(meta, actions);
+					shareListEl.append(item);
+				});
+			};
+
+			const getParentPath = (path) => {
+				if (!path) {
+					return "";
+				}
+				const parts = path.split("/").filter(Boolean);
+				parts.pop();
+				return parts.join("/");
+			};
+
+			const loadShareList = async (path) => {
+				shareStatusEl.textContent = "Loading shared files...";
+				shareListEl.textContent = "";
+				shareUpButton.disabled = !path;
+				try {
+					const response = await fetch(buildListUrl(path));
+					if (!response.ok) {
+						throw new Error(`Unable to load (${response.status})`);
+					}
+					const data = await response.json();
+					renderBreadcrumb(data.path || "");
+					renderShareEntries(data.entries || []);
+					const count = Array.isArray(data.entries) ? data.entries.length : 0;
+					shareStatusEl.textContent = count === 0 ? "No items available." : `Showing ${count} item${count === 1 ? "" : "s"}.`;
+					shareUpButton.disabled = !data.path;
+				} catch (error) {
+					shareStatusEl.textContent = error instanceof Error ? error.message : "Unable to load shared files.";
+				}
+			};
+
+			const navigateToShare = (path) => {
+				updateUrlPath(path);
+				loadShareList(path);
+			};
+
+			shareRefreshButton.addEventListener("click", () => {
+				loadShareList(getCurrentSharePath());
+			});
+
+			shareUpButton.addEventListener("click", () => {
+				const current = getCurrentSharePath();
+				navigateToShare(getParentPath(current));
+			});
+
+			window.addEventListener("popstate", () => {
+				loadShareList(getCurrentSharePath());
+			});
+
+			loadShareList(getCurrentSharePath());
 		</script>
 	</body>
 </html>
